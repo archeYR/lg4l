@@ -89,6 +89,12 @@ struct g19_data {
 	u8 led_mbtns;		/* m1, m2, m3 and mr */
 	u8 screen_bl;		/* lcd backlight */
 
+#ifdef CONFIG_PM
+	u8 pm_backlight_rgb[3];
+	u8 pm_led_mbtns;
+	u8 pm_screen_bl;
+#endif
+
 	/* non-standard buttons */
 	u8 ep1keys[2];
 	struct urb *ep1_urb;
@@ -466,15 +472,53 @@ static int g19_raw_event(struct hid_device *hdev,
 
 #ifdef CONFIG_PM
 
+static int g19_suspend(struct hid_device *hdev, pm_message_t message)
+{
+	unsigned long irq_flags;
+	struct gcore_data *gdata = hid_get_gdata(hdev);
+	struct g19_data *g19data = gdata->data;
+
+	spin_lock_irqsave(&gdata->lock, irq_flags);
+
+	g19data->pm_backlight_rgb[0] = g19data->backlight_rgb[0];
+	g19data->pm_backlight_rgb[1] = g19data->backlight_rgb[1];
+	g19data->pm_backlight_rgb[2] = g19data->backlight_rgb[2];
+	g19data->pm_led_mbtns = g19data->led_mbtns;
+	g19data->pm_screen_bl = g19data->screen_bl;
+
+	g19data->backlight_rgb[0] = 0;
+	g19data->backlight_rgb[1] = 0;
+	g19data->backlight_rgb[2] = 0;
+	g19data->led_mbtns = 0;
+	g19data->screen_bl = 0;
+	
+	g19_led_bl_send(hdev);
+	g19_led_mbtns_send(hdev);
+	g19_led_screen_bl_send(hdev);
+	
+	spin_unlock_irqrestore(&gdata->lock, irq_flags);
+
+	return 0;
+}
+
 static int g19_resume(struct hid_device *hdev)
 {
 	unsigned long irq_flags;
 	struct gcore_data *gdata = hid_get_gdata(hdev);
+	struct g19_data *g19data = gdata->data;
 
 	spin_lock_irqsave(&gdata->lock, irq_flags);
+
+	g19data->backlight_rgb[0] = g19data->pm_backlight_rgb[0];
+	g19data->backlight_rgb[1] = g19data->pm_backlight_rgb[1];
+	g19data->backlight_rgb[2] = g19data->pm_backlight_rgb[2];
+	g19data->led_mbtns = g19data->pm_led_mbtns;
+	g19data->screen_bl = g19data->pm_screen_bl;
+
 	g19_led_bl_send(hdev);
 	g19_led_mbtns_send(hdev);
 	g19_led_screen_bl_send(hdev);
+	
 	spin_unlock_irqrestore(&gdata->lock, irq_flags);
 
 	return 0;
@@ -826,6 +870,16 @@ static void g19_remove(struct hid_device *hdev)
 	struct gcore_data *gdata = hid_get_drvdata(hdev);
 	struct g19_data *g19data = gdata->data;
 
+        g19data->backlight_rgb[0] = 0;
+	g19data->backlight_rgb[1] = 0;
+	g19data->backlight_rgb[2] = 0;
+	g19data->led_mbtns = 0;
+	g19data->screen_bl = 0;
+	
+	g19_led_bl_send(hdev);
+	g19_led_mbtns_send(hdev);
+	g19_led_screen_bl_send(hdev);
+
 	usb_poison_urb(g19data->ep1_urb);
 
 	sysfs_remove_group(&(hdev->dev.kobj), &g19_attr_group);
@@ -857,6 +911,7 @@ static struct hid_driver g19_driver = {
 	.raw_event		= g19_raw_event,
 
 #ifdef CONFIG_PM
+	.suspend                = g19_suspend,
 	.resume			= g19_resume,
 	.reset_resume		= g19_reset_resume,
 #endif
