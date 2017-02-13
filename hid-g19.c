@@ -98,11 +98,16 @@ struct g19_data {
 	/* non-standard buttons */
 	u8 ep1keys[2];
 	struct urb *ep1_urb;
-	spinlock_t ep1_urb_lock;
 
 	/* initialization stages */
 	struct completion ready;
 	int ready_stages;
+};
+
+/* used in sending lcd backlight control urbs */
+struct screen_bl_urb_context {
+        struct usb_ctrlrequest request;
+        u8 data[9];
 };
 
 /* Convenience macros */
@@ -257,37 +262,76 @@ g19_led_bl_brightness_get(struct led_classdev *led_cdev)
 	return LED_OFF;
 }
 
+
+static void g19_led_screen_bl_send_completion(struct urb *urb)
+{
+	struct screen_bl_urb_context *urb_context = urb->context;
+	kfree(urb_context);
+	usb_free_urb(urb);
+}
+
 static void g19_led_screen_bl_send(struct hid_device *hdev)
 {
 	struct usb_interface *intf;
 	struct usb_device *usb_dev;
 	struct g19_data *g19data = hid_get_g19data(hdev);
+        struct screen_bl_urb_context *urb_context;
+        struct urb *urb;
 	unsigned int pipe;
-	int i = 0;
-
-	unsigned char cp[9];
-
-	cp[0] = g19data->screen_bl;
-	cp[1] = 0xe2;
-	cp[2] = 0x12;
-	cp[3] = 0x00;
-	cp[4] = 0x8c;
-	cp[5] = 0x11;
-	cp[6] = 0x00;
-	cp[7] = 0x10;
-	cp[8] = 0x00;
+	int ret;
 
 	intf = to_usb_interface(hdev->dev.parent);
 	usb_dev = interface_to_usbdev(intf);
 	pipe = usb_sndctrlpipe(usb_dev, 0x00);
-	i = usb_control_msg(usb_dev, pipe, 0x0a,
-			    USB_TYPE_VENDOR | USB_RECIP_INTERFACE,
-			    0, 0, cp, sizeof(cp),
-			    1 * HZ);
-	if (i < 0) {
+
+	/* ret = usb_control_msg(usb_dev, pipe, 0x0a, */
+	/*			 USB_TYPE_VENDOR | USB_RECIP_INTERFACE, */
+	/*			 0, 0, cp, sizeof(cp), */
+	/*			 1 * HZ); */
+
+        urb = usb_alloc_urb(0, GFP_NOIO);
+        if (!urb) {
+                ret = -ENOMEM;
+		goto err_alloc_urb;
+        }
+
+	urb_context = kmalloc(sizeof(struct screen_bl_urb_context), GFP_NOIO);
+	if (!urb_context) {
+		ret = -ENOMEM;
+		goto err_alloc_urb_context;
+	}
+
+	urb_context->data[0] = g19data->screen_bl;
+	urb_context->data[1] = 0xe2;
+	urb_context->data[2] = 0x12;
+	urb_context->data[3] = 0x00;
+	urb_context->data[4] = 0x8c;
+	urb_context->data[5] = 0x11;
+	urb_context->data[6] = 0x00;
+	urb_context->data[7] = 0x10;
+	urb_context->data[8] = 0x00;
+
+	urb_context->request.bRequestType = USB_TYPE_VENDOR | USB_RECIP_INTERFACE;
+	urb_context->request.bRequest = 0x0a;
+	urb_context->request.wValue = cpu_to_le16(0);
+	urb_context->request.wIndex = cpu_to_le16(0);
+	urb_context->request.wLength = cpu_to_le16(sizeof(urb_context->data));
+
+	usb_fill_control_urb(urb, usb_dev, pipe, (unsigned char *) &(urb_context->request),
+			     urb_context->data, sizeof(urb_context->data),
+			     g19_led_screen_bl_send_completion, urb_context);
+	ret = usb_submit_urb(urb, GFP_NOIO);
+
+        goto done;
+
+err_alloc_urb_context:
+        usb_free_urb(urb);
+err_alloc_urb:
+done:
+	if (ret < 0) {
 		dev_warn(&hdev->dev,
 			 G19_NAME " error setting LCD backlight level %d\n",
-			 i);
+			 ret);
 	}
 }
 
@@ -755,7 +799,7 @@ static int g19_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	g19data->ep1_urb = usb_alloc_urb(0, GFP_KERNEL);
 	if (g19data->ep1_urb == NULL) {
 		dev_err(&hdev->dev,
-			"%s: ERROR: can't alloc ep1 urb stuff\n",
+			"%s: ERROR: can't alloc ep1 urb\n",
 			gdata->name);
 		error = -ENOMEM;
 		goto err_cleanup_g19data;
@@ -870,7 +914,7 @@ static void g19_remove(struct hid_device *hdev)
 	struct gcore_data *gdata = hid_get_drvdata(hdev);
 	struct g19_data *g19data = gdata->data;
 
-        g19data->backlight_rgb[0] = 0;
+	g19data->backlight_rgb[0] = 0;
 	g19data->backlight_rgb[1] = 0;
 	g19data->backlight_rgb[2] = 0;
 	g19data->led_mbtns = 0;
@@ -911,7 +955,7 @@ static struct hid_driver g19_driver = {
 	.raw_event		= g19_raw_event,
 
 #ifdef CONFIG_PM
-	.suspend                = g19_suspend,
+	.suspend		= g19_suspend,
 	.resume			= g19_resume,
 	.reset_resume		= g19_reset_resume,
 #endif
