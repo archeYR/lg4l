@@ -15,6 +15,7 @@
  *   along with this software. If not see <http://www.gnu.org/licenses/>.  *
  ***************************************************************************/
 #include <linux/hid.h>
+#include <linux/hiddev.h>
 #include <linux/input.h>
 #include <linux/leds.h>
 #include <linux/module.h>
@@ -220,6 +221,9 @@ void gcore_input_remove(struct gcore_data *gdata)
 }
 EXPORT_SYMBOL_GPL(gcore_input_remove);
 
+static int get_hdev_minor(struct hid_device *hdev) {
+	return ((struct hiddev *)hdev->hiddev)->minor;
+}
 
 int gcore_leds_probe(struct gcore_data *gdata,
 		     const struct led_classdev led_templates[],
@@ -261,7 +265,7 @@ int gcore_leds_probe(struct gcore_data *gdata,
 			error = -ENOMEM;
 			goto err_cleanup_led_structs;
 		}
-		sprintf(led_name, led_templates[i].name, hdev->minor);
+		sprintf(led_name, led_templates[i].name, get_hdev_minor(hdev));
 		gdata->led_cdev[i]->name = led_name;
 	}
 
@@ -384,7 +388,7 @@ ssize_t gcore_minor_show(struct device *dev,
 {
 	struct gcore_data *gdata = dev_get_gdata(dev);
 
-	return sprintf(buf, "%d\n", gdata->hdev->minor);
+	return sprintf(buf, "%d\n", get_hdev_minor(gdata->hdev));
 }
 EXPORT_SYMBOL_GPL(gcore_minor_show);
 
