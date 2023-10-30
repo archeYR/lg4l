@@ -657,7 +657,6 @@ struct gfb_data *gfb_probe(struct hid_device *hdev,
 	data->fb_info->pseudo_palette = &pseudo_palette;
 	data->fb_info->fbops = &gfb_ops;
 	data->fb_info->par = data;
-	data->fb_info->flags = FBINFO_FLAG_DEFAULT;
 	data->fb_info->fix.smem_len =
 		data->fb_info->fix.line_length * data->fb_info->var.yres;
 
